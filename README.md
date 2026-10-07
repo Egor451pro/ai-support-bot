@@ -18,7 +18,8 @@ python -m bot.main
 ```
 
 Заполните в `.env`: `BOT_TOKEN`, `DATABASE_URL`, `GROQ_API_KEY`, `SUPPORT_GROUP_CHAT_ID`.  
-Локально: `MODE=polling`. Health: `GET http://127.0.0.1:8000/health`.
+Локально: `MODE=polling`. На Render: `MODE=webhook` + `WEBHOOK_BASE_URL` + `WEBHOOK_SECRET`.  
+Health: `GET http://127.0.0.1:8000/health` (HTTP 200).
 
 ## Структура (ключевые файлы)
 

@@ -109,7 +109,7 @@ def create_operator_router() -> Router:
             f"Диалог закрыт, клиент <code>{client_chat_id}</code> возвращён в AI_MODE."
         )
 
-    @router.message(F.reply_to_message)
+    @router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text)
     async def operator_reply_bridge(
         message: Message,
         session: AsyncSession,
@@ -121,20 +121,46 @@ def create_operator_router() -> Router:
             return
         if message.text and message.text.startswith("/"):
             return
-        if message.reply_to_message is None:
-            return
-
-        binding = await get_binding_by_operator_msg(session, message.reply_to_message.message_id)
-        if binding is None:
-            return
 
         text = message.text or message.caption
         if not text:
-            await message.reply("Сейчас поддерживается только текстовый ответ клиенту.")
             return
 
+        client_chat_id: int | None = None
+
+        if message.reply_to_message is not None:
+            binding = await get_binding_by_operator_msg(
+                session, message.reply_to_message.message_id
+            )
+            if binding is not None:
+                client_chat_id = binding.client_chat_id
+            else:
+                await message.reply(
+                    "Это сообщение не связано с клиентом.\n"
+                    "Сделайте <b>Reply</b> на карточку эскалации или на «💬 От …», "
+                    "либо просто напишите текст — если активен один диалог, отправлю туда."
+                )
+                # Fall through: maybe single active dialog can still receive it.
+                active = await list_operator_mode_chats(session)
+                if len(active) == 1:
+                    client_chat_id = active[0].chat_id
+                else:
+                    return
+        else:
+            active = await list_operator_mode_chats(session)
+            if len(active) == 1:
+                client_chat_id = active[0].chat_id
+            elif not active:
+                await message.reply("Нет активных диалогов с клиентами (OPERATOR_MODE).")
+                return
+            else:
+                await message.reply(
+                    "Несколько активных диалогов. Ответьте <b>Reply</b> на сообщение нужного клиента."
+                )
+                return
+
         await message.bot.send_message(
-            binding.client_chat_id,
+            client_chat_id,
             f"👨‍💼 Оператор:\n{text}",
             parse_mode=None,
         )
@@ -142,16 +168,16 @@ def create_operator_router() -> Router:
         await create_binding(
             session,
             operator_msg_id=message.message_id,
-            client_chat_id=binding.client_chat_id,
+            client_chat_id=client_chat_id,
         )
 
-        state = await get_or_create_chat_state(session, binding.client_chat_id)
+        state = await get_or_create_chat_state(session, client_chat_id)
         if state.mode == ChatMode.OPERATOR_MODE:
             await assign_operator_if_empty(session, state, message.from_user.id)
 
         await add_message_log(
             session,
-            chat_id=binding.client_chat_id,
+            chat_id=client_chat_id,
             role=MessageRole.operator,
             content=text,
         )

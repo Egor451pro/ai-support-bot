@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     )
 
     bot_token: str = Field(..., alias="BOT_TOKEN")
-    mode: Literal["polling", "webhook"] = Field(default="polling", alias="MODE")
+    # Default webhook for Render; use MODE=polling locally.
+    mode: Literal["polling", "webhook"] = Field(default="webhook", alias="MODE")
     database_url: str = Field(..., alias="DATABASE_URL")
     groq_api_key: str = Field(..., alias="GROQ_API_KEY")
     groq_model: str = Field(default="qwen/qwen3.8-27b", alias="GROQ_MODEL")
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     webhook_secret: str = Field(default="", alias="WEBHOOK_SECRET")
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
+    db_ssl: bool = Field(default=True, alias="DB_SSL")
     message_history_limit: int = 8
     message_log_keep: int = 50
     faq_path: str = "data/faq.txt"
@@ -73,8 +75,26 @@ class Settings(BaseSettings):
             return value.strip().rstrip("/")
         return value
 
+    @field_validator("db_ssl", mode="before")
+    @classmethod
+    def normalize_db_ssl(cls, value: object) -> object:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return value
+
     @model_validator(mode="after")
     def validate_webhook_config(self) -> Settings:
+        if self.db_ssl:
+            parsed = urlparse(self.database_url)
+            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            if "ssl" not in query and "sslmode" not in query:
+                query["ssl"] = "require"
+                self.database_url = urlunparse(parsed._replace(query=urlencode(query)))
+
         if self.mode != "webhook":
             return self
 
@@ -96,7 +116,7 @@ class Settings(BaseSettings):
     def webhook_url(self) -> str:
         if not self.webhook_base_url or not self.webhook_secret:
             return ""
-        return f"{self.webhook_base_url}{self.webhook_path}"
+        return f"{self.webhook_base_url.rstrip('/')}{self.webhook_path}"
 
 
 @lru_cache

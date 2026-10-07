@@ -55,14 +55,18 @@ async def lifespan(app: FastAPI):
     logger.info("Database schema ensured")
 
     if settings.mode == "webhook":
-        # Keep webhook across free-tier sleeps; do not delete on shutdown.
+        webhook_url = (
+            f"{settings.webhook_base_url.rstrip('/')}/webhook/{settings.webhook_secret}"
+        )
+        # Keep webhook across free-tier sleeps so Telegram can wake Render.
         await bot.set_webhook(
-            url=settings.webhook_url,
+            url=webhook_url,
             secret_token=settings.webhook_secret,
             drop_pending_updates=False,
         )
-        logger.info("Webhook registered: %s", settings.webhook_url)
+        logger.info("Webhook registered: %s", webhook_url)
     else:
+        # Local debug: remove webhook and use long-polling.
         await bot.delete_webhook(drop_pending_updates=False)
         _polling_task = asyncio.create_task(dp.start_polling(bot))
         logger.info("Long-polling started in background task")
@@ -79,8 +83,8 @@ async def lifespan(app: FastAPI):
             pass
         _polling_task = None
 
-    # Intentionally do NOT delete_webhook here: after Render free sleep,
-    # Telegram must still be able to wake the service via the webhook.
+    # CRITICAL: do NOT call delete_webhook() on shutdown.
+    # After Render free sleep, Telegram must still deliver updates to this URL.
 
     await bot.session.close()
     await dispose_engine()
@@ -108,12 +112,13 @@ def create_app() -> FastAPI:
     async def health() -> JSONResponse:
         faq_ok = Path(settings.faq_path).is_file()
         return JSONResponse(
-            {
+            status_code=200,
+            content={
                 "status": "ok",
                 "mode": settings.mode,
                 "faq_loaded": faq_ok,
                 "faq_hash": faq_content_hash() if faq_ok else None,
-            }
+            },
         )
 
     @app.post("/webhook/{secret}")
@@ -147,8 +152,8 @@ def main() -> None:
     # the same routers twice and raise RuntimeError.
     uvicorn.run(
         app,
-        host=settings.host,
-        port=settings.port,
+        host=settings.host,  # 0.0.0.0
+        port=settings.port,  # Render injects PORT
         reload=False,
     )
 

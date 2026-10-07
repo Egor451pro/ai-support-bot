@@ -14,4 +14,7 @@ dist/
 build/
 Untitled
 ключ API.txt
-
+*.pem
+*.key
+.env.*
+!.env.example
